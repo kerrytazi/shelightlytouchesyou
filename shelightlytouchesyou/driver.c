@@ -139,7 +139,7 @@ ProcessRequestReadProcessMemory(
 	}
 	__except (EXCEPTION_EXECUTE_HANDLER)
 	{
-		status = GetExceptionCode();
+		status = STATUS_UNSUCCESSFUL;
 	}
 
 	KeUnstackDetachProcess(&apcState);
@@ -175,7 +175,7 @@ ProcessRequestWriteProcessMemory(
 	}
 	__except (EXCEPTION_EXECUTE_HANDLER)
 	{
-		status = GetExceptionCode();
+		status = STATUS_UNSUCCESSFUL;
 	}
 
 	KeUnstackDetachProcess(&apcState);
