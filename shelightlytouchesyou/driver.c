@@ -1,5 +1,7 @@
 #include "driver.h"
 
+#include "pebhelper.h"
+
 #include <ntifs.h>
 #include <ntddk.h>
 #include <wdf.h>
@@ -7,6 +9,16 @@
 DRIVER_INITIALIZE DriverEntry;
 EVT_WDF_DRIVER_UNLOAD DriverUnload;
 EVT_WDF_IO_QUEUE_IO_DEFAULT EvtDeviceIoDefault;
+
+typedef NTSTATUS(*QUERY_INFO_PROCESS) (
+	__in HANDLE ProcessHandle,
+	__in PROCESSINFOCLASS ProcessInformationClass,
+	__out_bcount(ProcessInformationLength) PVOID ProcessInformation,
+	__in ULONG ProcessInformationLength,
+	__out_opt PULONG ReturnLength
+);
+
+QUERY_INFO_PROCESS ZwQueryInformationProcess;
 
 NTSTATUS
 CreateCDODevice(
@@ -19,6 +31,8 @@ CreateCDODevice(
 	WDFQUEUE queue;
 	WDF_OBJECT_ATTRIBUTES attributes;
 	WDF_IO_QUEUE_CONFIG ioQConfig;
+
+	PAGED_CODE();
 
 	init = WdfControlDeviceInitAllocate(driverObject, &SDDL_DEVOBJ_SYS_ALL_ADM_RWX_WORLD_RW_RES_R);
 
@@ -70,6 +84,8 @@ DriverEntry(
 	WDFDRIVER driver;
 	WDF_DRIVER_CONFIG config;
 
+	PAGED_CODE();
+
 	WDF_DRIVER_CONFIG_INIT(&config, NULL);
 
 	config.DriverInitFlags = WdfDriverInitNonPnpDriver;
@@ -85,6 +101,15 @@ DriverEntry(
 	if (!NT_SUCCESS(status))
 		goto M_END;
 
+	DECLARE_CONST_UNICODE_STRING(RoutineName, L"ZwQueryInformationProcess");
+	ZwQueryInformationProcess = (QUERY_INFO_PROCESS)MmGetSystemRoutineAddress((PUNICODE_STRING)&RoutineName);
+
+	if (ZwQueryInformationProcess == NULL)
+	{
+		status = STATUS_UNSUCCESSFUL;
+		goto M_END;
+	}
+
 	status = CreateCDODevice(driver);
 
 M_END:
@@ -96,6 +121,8 @@ DriverUnload(
 	_In_ WDFDRIVER Driver
 )
 {
+	PAGED_CODE();
+
 	UNREFERENCED_PARAMETER(Driver);
 }
 
@@ -106,6 +133,8 @@ ProcessRequestVersion(
 )
 {
 	const struct CResponseVersion version = { DRIVER_VERSION };
+
+	PAGED_CODE();
 
 	RtlCopyMemory(VResponse, &version, sizeof(struct CResponseVersion));
 
@@ -124,6 +153,8 @@ ProcessRequestReadProcessMemory(
 	PEPROCESS process;
 	KAPC_STATE apcState;
 	ULONG writeBytesPending = (ULONG)RPMRequest->size;
+
+	PAGED_CODE();
 
 	status = PsLookupProcessByProcessId(RPMRequest->pid, &process);
 
@@ -161,6 +192,8 @@ ProcessRequestWriteProcessMemory(
 	PEPROCESS process;
 	KAPC_STATE apcState;
 
+	PAGED_CODE();
+
 	status = PsLookupProcessByProcessId(WPMRequest->pid, &process);
 
 	if (!NT_SUCCESS(status))
@@ -186,6 +219,124 @@ M_ERR:
 	return status;
 }
 
+NTSTATUS
+GetModuleHandleFromProcessPEB(
+	_In_ PPEB Peb,
+	_In_ PWCHAR ModuleName,
+	_In_ SIZE_T ModuleNameSize,
+	_Out_ void **Result
+)
+{
+	NTSTATUS status = STATUS_UNSUCCESSFUL;
+	PLIST_ENTRY inMemoryOrderModuleList;
+	PLIST_ENTRY tempListItem;
+	UNICODE_STRING searchModuleName;
+	PUNICODE_STRING processModuleName;
+
+	PAGED_CODE();
+
+	searchModuleName.Length = (USHORT)ModuleNameSize * 2;
+	searchModuleName.MaximumLength = (USHORT)ModuleNameSize * 2;
+	searchModuleName.Buffer = ModuleName;
+
+	__try
+	{
+		inMemoryOrderModuleList = PEB_GetInMemoryOrderModuleList(Peb);
+		tempListItem = inMemoryOrderModuleList;
+
+		for (tempListItem = tempListItem->Flink; tempListItem != inMemoryOrderModuleList; tempListItem = tempListItem->Flink)
+		{
+			processModuleName = LDR_DATA_GetFullDllName((PLDR_DATA_TABLE_ENTRY)tempListItem);
+
+			if (RtlEqualUnicodeString(&searchModuleName, processModuleName, TRUE) == TRUE)
+			{
+				*Result = LDR_DATA_GetModuleBase((PLDR_DATA_TABLE_ENTRY)tempListItem);
+
+				status = STATUS_SUCCESS;
+				break;
+			}
+		}
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER)
+	{
+		status = STATUS_UNSUCCESSFUL;
+	}
+
+	return status;
+}
+
+NTSTATUS
+GetProcessPEB(
+	_In_ HANDLE hProcess,
+	_Out_ PPEB *peb
+)
+{
+	NTSTATUS status;
+	PROCESS_BASIC_INFORMATION BasicInfo;
+	ULONG returenLength = 0;
+
+	PAGED_CODE();
+
+	status = ZwQueryInformationProcess(hProcess,
+		ProcessBasicInformation,
+		&BasicInfo,
+		sizeof(BasicInfo),
+		&returenLength);
+
+	if (!NT_SUCCESS(status))
+		goto M_ERR;
+
+	*peb = BasicInfo.PebBaseAddress;
+
+M_ERR:
+	return status;
+}
+
+NTSTATUS
+ProcessRequestModuleBase(
+	_Inout_ struct CRequestModuleBase *MBRequest,
+	_Out_ PULONG WroteBytes
+)
+{
+	NTSTATUS status;
+	PEPROCESS process;
+	HANDLE hProcess;
+	PPEB peb;
+	void *result;
+
+	PAGED_CODE();
+
+	status = PsLookupProcessByProcessId(MBRequest->pid, &process);
+
+	if (!NT_SUCCESS(status))
+		goto M_ERR;
+
+	status = ObOpenObjectByPointer(process, 0, NULL, 0, 0, KernelMode, &hProcess);
+
+	if (!NT_SUCCESS(status))
+		goto M_ERR2;
+
+	status = GetProcessPEB(hProcess, &peb);
+
+	if (!NT_SUCCESS(status))
+		goto M_ERR2;
+
+	status = GetModuleHandleFromProcessPEB(peb, (PWCHAR)(MBRequest + 1), MBRequest->size, &result);
+
+	if (!NT_SUCCESS(status))
+		goto M_ERR2;
+
+	RtlCopyMemory(MBRequest, &result, sizeof(result));
+
+M_ERR2:
+	ObDereferenceObject(process);
+
+M_ERR:
+	*WroteBytes = NT_SUCCESS(status) ? sizeof(result) : 0;
+
+	return status;
+}
+
 VOID
 EvtDeviceIoDefault(
 	_In_ WDFQUEUE   Queue,
@@ -197,7 +348,8 @@ EvtDeviceIoDefault(
 	PIRP irp;
 	void *buffer;
 	ULONG ioControlCode;
-	ULONG wroteBytes;
+
+	PAGED_CODE();
 
 	UNREFERENCED_PARAMETER(Queue);
 
@@ -230,6 +382,8 @@ EvtDeviceIoDefault(
 	{
 		case CTL_RequestVersion:
 			{
+				ULONG wroteBytes;
+
 				if (params.Parameters.DeviceIoControl.OutputBufferLength != sizeof(struct CResponseVersion))
 				{
 					status = STATUS_INVALID_BUFFER_SIZE;
@@ -245,6 +399,8 @@ EvtDeviceIoDefault(
 
 		case CTL_RequestReadProcessMemory:
 			{
+				ULONG wroteBytes;
+
 				if (params.Parameters.DeviceIoControl.InputBufferLength != sizeof(struct CRequestReadProcessMemory))
 				{
 					status = STATUS_INVALID_BUFFER_SIZE;
@@ -289,9 +445,32 @@ EvtDeviceIoDefault(
 				goto M_END;
 			}
 
-		case CTL_RequestGetModuleBase:
+		case CTL_RequestModuleBase:
 			{
-				status = STATUS_NOT_IMPLEMENTED;
+				ULONG wroteBytes;
+
+				if (params.Parameters.DeviceIoControl.InputBufferLength < sizeof(struct CRequestModuleBase))
+				{
+					status = STATUS_INVALID_BUFFER_SIZE;
+					goto M_END;
+				}
+
+				if (params.Parameters.DeviceIoControl.InputBufferLength != sizeof(struct CRequestModuleBase) + (((struct CRequestModuleBase *)buffer)->size + 1) * sizeof(WCHAR))
+				{
+					status = STATUS_INVALID_BUFFER_SIZE;
+					goto M_END;
+				}
+
+				if (params.Parameters.DeviceIoControl.OutputBufferLength != sizeof(PVOID))
+				{
+					status = STATUS_INVALID_BUFFER_SIZE;
+					goto M_END;
+				}
+
+				status = ProcessRequestModuleBase(buffer, &wroteBytes);
+
+				irp->IoStatus.Information = wroteBytes;
+
 				goto M_END;
 			}
 

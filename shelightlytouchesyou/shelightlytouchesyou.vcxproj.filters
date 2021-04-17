@@ -23,9 +23,15 @@
     <ClInclude Include="driver.h">
       <Filter>Source Files</Filter>
     </ClInclude>
+    <ClInclude Include="pebhelper.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="driver.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="pebhelper.c">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
