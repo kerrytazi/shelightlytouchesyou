@@ -123,7 +123,6 @@ void CDriverHelper::ReqReadProcessMemory(void *Pid, void *Addr, size_t Size, voi
 	Request.pid = Pid;
 	Request.ptr = Addr;
 	Request.size = Size;
-	int Response = 0;
 
 	DWORD Wrote = 0;
 
@@ -138,7 +137,7 @@ void CDriverHelper::ReqReadProcessMemory(void *Pid, void *Addr, size_t Size, voi
 		throw std::runtime_error(ss.str());
 	}
 
-	if (Wrote != sizeof(Response))
+	if (Wrote != Size)
 	{
 		std::stringstream ss;
 		ss << "ReqReadProcessMemory wrote = ";
