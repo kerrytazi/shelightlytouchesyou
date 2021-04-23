@@ -7,12 +7,13 @@ class CDriverHelper
 {
 	void *m_DriverHandle;
 
+	uint32_t ReqVersion() const;
+
 public:
 
 	CDriverHelper();
 	~CDriverHelper();
 
-	uint32_t ReqVersion() const;
 	void ReqReadProcessMemory(void *Pid, void *Addr, size_t Size, void *Out) const;
 	void ReqWriteProcessMemory(void *Pid, void *Addr, size_t Size, const void *From) const;
 	void *ReqGetModuleBase(void *Pid, const wchar_t *pModuleName, size_t ModuleNameSize) const;

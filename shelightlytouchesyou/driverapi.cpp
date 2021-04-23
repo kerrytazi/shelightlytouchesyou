@@ -72,6 +72,18 @@ CDriverHelper::CDriverHelper()
 	{
 		throw std::runtime_error("Can't connect to driver");
 	}
+
+	auto Version = ReqVersion();
+
+	if (Version != DRIVER_VERSION)
+	{
+		std::stringstream ss;
+		ss << "Driver version don't match. API version = ";
+		ss << ", driver = ";
+		ss << Version;
+
+		throw std::runtime_error(ss.str());
+	}
 }
 
 CDriverHelper::~CDriverHelper()
@@ -87,7 +99,7 @@ uint32_t CDriverHelper::ReqVersion() const
 
 	BOOL result = DeviceIoControl(m_DriverHandle, CTL_RequestVersion, NULL, 0, &Response, sizeof(Response), &Wrote, NULL);
 
-	if (result == 0)
+	if (result == FALSE)
 	{
 		std::stringstream ss;
 		ss << "ReqVersion Failed GetLastError = ";
@@ -101,15 +113,6 @@ uint32_t CDriverHelper::ReqVersion() const
 		std::stringstream ss;
 		ss << "ReqVersion wrote = ";
 		ss << Wrote;
-
-		throw std::runtime_error(ss.str());
-	}
-
-	if (Response.Version != DRIVER_VERSION)
-	{
-		std::stringstream ss;
-		ss << "ReqVersion version don't match = ";
-		ss << Response.Version;
 
 		throw std::runtime_error(ss.str());
 	}
@@ -129,7 +132,7 @@ void CDriverHelper::ReqReadProcessMemory(void *Pid, void *Addr, size_t Size, voi
 
 	BOOL result = DeviceIoControl(m_DriverHandle, CTL_RequestReadProcessMemory, &Request, sizeof(Request), Out, (DWORD)Size, &Wrote, NULL);
 
-	if (result == 0)
+	if (result == FALSE)
 	{
 		std::stringstream ss;
 		ss << "ReqReadProcessMemory Failed GetLastError = ";
@@ -163,7 +166,7 @@ void CDriverHelper::ReqWriteProcessMemory(void *Pid, void *Addr, size_t Size, co
 
 	BOOL result = DeviceIoControl(m_DriverHandle, CTL_RequestWriteProcessMemory, pRequest, (DWORD)TotalSize, NULL, 0, NULL, NULL);
 
-	if (result == 0)
+	if (result == FALSE)
 	{
 		std::stringstream ss;
 		ss << "ReqWriteProcessMemory Failed GetLastError = ";
@@ -191,7 +194,7 @@ void *CDriverHelper::ReqGetModuleBase(void *Pid, const wchar_t *pWideModuleName,
 
 	BOOL result = DeviceIoControl(m_DriverHandle, CTL_RequestModuleBase, pRequest, (DWORD)TotalSize, &Response, sizeof(Response), &Wrote, NULL);
 
-	if (result == 0)
+	if (result == FALSE)
 	{
 		std::stringstream ss;
 		ss << "ReqGetModuleBase Failed GetLastError = ";
@@ -221,6 +224,7 @@ void *CDriverHelper::ReqGetModuleBase(void *Pid, const char *pModuleName, size_t
 	wchar_t *pWideModuleName = ScopeBuffer.Alloc<wchar_t>(WideModuleNameSize * 2);
 
 	MultiByteToWideChar(CP_UTF8, 0, pModuleName, (DWORD)ModuleNameSize, pWideModuleName, (DWORD)WideModuleNameSize);
+	pWideModuleName[WideModuleNameSize] = 0;
 
 	return ReqGetModuleBase(Pid, pWideModuleName, WideModuleNameSize);
 }
@@ -257,6 +261,7 @@ CDriverProcessHelper::CDriverProcessHelper(const CDriverHelper &Helper, const wc
 		char *pProcName = ScopeBuffer.Alloc<char>(ProcNameSize);
 
 		WideCharToMultiByte(CP_UTF8, 0, pWideProcName, (DWORD)WideProcNameSize, pProcName, (DWORD)ProcNameSize, nullptr, nullptr);
+		pProcName[ProcNameSize] = 0;
 
 		std::stringstream ss;
 		ss << "CDriverProcessHelper Can't find process by name ";
@@ -276,6 +281,7 @@ CDriverProcessHelper::CDriverProcessHelper(const CDriverHelper &Helper, const ch
 	wchar_t *pWideProcName = ScopeBuffer.Alloc<wchar_t>(WideProcNameSize * 2);
 
 	MultiByteToWideChar(CP_UTF8, 0, pProcName, (DWORD)ProcNameSize, pWideProcName, (DWORD)WideProcNameSize);
+	pWideProcName[WideProcNameSize] = 0;
 
 	m_ProcessPid = GetPidByName(pWideProcName, WideProcNameSize);
 

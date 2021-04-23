@@ -1,6 +1,7 @@
 #include "driver.h"
 
 #include "pebhelper.h"
+#include "peb64.h"
 
 #include <ntifs.h>
 #include <ntddk.h>
@@ -11,14 +12,14 @@ EVT_WDF_DRIVER_UNLOAD DriverUnload;
 EVT_WDF_IO_QUEUE_IO_DEFAULT EvtDeviceIoDefault;
 
 typedef NTSTATUS(*QUERY_INFO_PROCESS) (
-	__in HANDLE ProcessHandle,
-	__in PROCESSINFOCLASS ProcessInformationClass,
-	__out_bcount(ProcessInformationLength) PVOID ProcessInformation,
-	__in ULONG ProcessInformationLength,
-	__out_opt PULONG ReturnLength
+	_In_ HANDLE ProcessHandle,
+	_In_ PROCESSINFOCLASS ProcessInformationClass,
+	_Out_ PVOID ProcessInformation,
+	_In_ ULONG ProcessInformationLength,
+	_Out_opt_ PULONG ReturnLength
 );
 
-QUERY_INFO_PROCESS ZwQueryInformationProcess;
+static QUERY_INFO_PROCESS ZwQueryInformationProcess;
 
 NTSTATUS
 CreateCDODevice(
@@ -99,7 +100,7 @@ DriverEntry(
 	);
 
 	if (!NT_SUCCESS(status))
-		goto M_END;
+		goto M_ERR;
 
 	DECLARE_CONST_UNICODE_STRING(RoutineName, L"ZwQueryInformationProcess");
 	ZwQueryInformationProcess = (QUERY_INFO_PROCESS)MmGetSystemRoutineAddress((PUNICODE_STRING)&RoutineName);
@@ -107,12 +108,17 @@ DriverEntry(
 	if (ZwQueryInformationProcess == NULL)
 	{
 		status = STATUS_UNSUCCESSFUL;
-		goto M_END;
+		goto M_ERR;
 	}
+
+	status = InitStaticFuncsPEBWOW64();
+
+	if (!NT_SUCCESS(status))
+		goto M_ERR;
 
 	status = CreateCDODevice(driver);
 
-M_END:
+M_ERR:
 	return status;
 }
 
@@ -281,7 +287,8 @@ GetProcessPEB(
 		ProcessBasicInformation,
 		&BasicInfo,
 		sizeof(BasicInfo),
-		&returenLength);
+		&returenLength
+	);
 
 	if (!NT_SUCCESS(status))
 		goto M_ERR;
@@ -322,6 +329,97 @@ ProcessRequestModuleBase(
 		goto M_ERR2;
 
 	status = GetModuleHandleFromProcessPEB(peb, (PWCHAR)(MBRequest + 1), MBRequest->size, &result);
+
+	if (!NT_SUCCESS(status))
+		goto M_ERR2;
+
+	RtlCopyMemory(MBRequest, &result, sizeof(result));
+
+M_ERR2:
+	ObDereferenceObject(process);
+
+M_ERR:
+	*WroteBytes = NT_SUCCESS(status) ? sizeof(result) : 0;
+
+	return status;
+}
+
+NTSTATUS
+GetModuleHandleFromProcessPEBWow64(
+	_In_ PPEB64 Peb,
+	_In_ PWCHAR ModuleName,
+	_In_ SIZE_T ModuleNameSize,
+	_Out_ void **Result
+)
+{
+	NTSTATUS status = STATUS_UNSUCCESSFUL;
+	PLIST_ENTRY inMemoryOrderModuleList;
+	PLIST_ENTRY tempListItem;
+	UNICODE_STRING searchModuleName;
+	PUNICODE_STRING processModuleName;
+
+	PAGED_CODE();
+
+	searchModuleName.Length = (USHORT)ModuleNameSize * 2;
+	searchModuleName.MaximumLength = (USHORT)ModuleNameSize * 2;
+	searchModuleName.Buffer = ModuleName;
+
+	__try
+	{
+		inMemoryOrderModuleList = PEB64_GetInMemoryOrderModuleList(Peb);
+		tempListItem = inMemoryOrderModuleList;
+
+		for (tempListItem = tempListItem->Flink; tempListItem != inMemoryOrderModuleList; tempListItem = tempListItem->Flink)
+		{
+			processModuleName = LDR_DATA_GetFullDllName((PLDR_DATA_TABLE_ENTRY)tempListItem);
+
+			if (RtlEqualUnicodeString(&searchModuleName, processModuleName, TRUE) == TRUE)
+			{
+				*Result = LDR_DATA_GetModuleBase((PLDR_DATA_TABLE_ENTRY)tempListItem);
+
+				status = STATUS_SUCCESS;
+				break;
+			}
+		}
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER)
+	{
+		status = STATUS_UNSUCCESSFUL;
+	}
+
+	return status;
+}
+
+NTSTATUS
+ProcessRequestModuleBaseWow64(
+	_Inout_ struct CRequestModuleBase *MBRequest,
+	_Out_ PULONG WroteBytes
+)
+{
+	NTSTATUS status;
+	PEPROCESS process;
+	HANDLE hProcess;
+	PPEB64 peb;
+	void *result;
+
+	PAGED_CODE();
+
+	status = PsLookupProcessByProcessId(MBRequest->pid, &process);
+
+	if (!NT_SUCCESS(status))
+		goto M_ERR;
+
+	status = ObOpenObjectByPointer(process, 0, NULL, 0, 0, KernelMode, &hProcess);
+
+	if (!NT_SUCCESS(status))
+		goto M_ERR2;
+
+	status = GetProcessPEBWow64(hProcess, &peb);
+
+	if (!NT_SUCCESS(status))
+		goto M_ERR2;
+
+	status = GetModuleHandleFromProcessPEBWow64(peb, (PWCHAR)(MBRequest + 1), MBRequest->size, &result);
 
 	if (!NT_SUCCESS(status))
 		goto M_ERR2;
@@ -467,7 +565,10 @@ EvtDeviceIoDefault(
 					goto M_END;
 				}
 
-				status = ProcessRequestModuleBase(buffer, &wroteBytes);
+				if (IoIs32bitProcess(irp))
+					status = ProcessRequestModuleBaseWow64(buffer, &wroteBytes);
+				else
+					status = ProcessRequestModuleBase(buffer, &wroteBytes);
 
 				irp->IoStatus.Information = wroteBytes;
 

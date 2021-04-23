@@ -26,12 +26,18 @@
     <ClInclude Include="pebhelper.h">
       <Filter>Source Files</Filter>
     </ClInclude>
+    <ClInclude Include="peb64.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="driver.c">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="pebhelper.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="peb64.c">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
